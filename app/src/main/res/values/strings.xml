@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ObjectDetection</string>
+
+    <string name="image_open">画像を開く</string>
+</resources>
