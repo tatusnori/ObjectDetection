@@ -2,6 +2,7 @@ package com.tatsunori.objectdetection;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
@@ -16,6 +17,7 @@ import android.provider.MediaStore;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -24,7 +26,14 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.qualcomm.qti.snpe.NeuralNetwork;
+import com.qualcomm.qti.snpe.SNPE;
+
+import java.io.File;
+import java.io.FileFilter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 
 import butterknife.BindView;
@@ -38,17 +47,46 @@ public class MainActivity extends AppCompatActivity {
 
     private DetectionTask mDteDetectionTask;
 
+    private NeuralNetwork.Runtime mTargetRuntime;
+
+    private String mModelPath;
+
     @BindView(R.id.imageView)
     ImageView mImageView;
 
     @BindView(R.id.textView)
     TextView mTextView;
 
+    enum MenuRuntimeGroup {
+
+        SelectCpuRuntime(NeuralNetwork.Runtime.CPU),
+        SelectGpuRuntime(NeuralNetwork.Runtime.GPU),
+        SelectDspRuntime(NeuralNetwork.Runtime.DSP);
+
+        public static int ID = 1;
+
+        public NeuralNetwork.Runtime runtime;
+
+        MenuRuntimeGroup(NeuralNetwork.Runtime runtime) {
+            this.runtime = runtime;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         ButterKnife.bind(this);
+
+        Log.d("@@@", "SNPE Version:" + SNPE.getRuntimeVersion(getApplication()));
+        boolean isGPU = new SNPE.NeuralNetworkBuilder(getApplication()).isRuntimeSupported(NeuralNetwork.Runtime.GPU);
+        boolean isDSP = new SNPE.NeuralNetworkBuilder(getApplication()).isRuntimeSupported(NeuralNetwork.Runtime.DSP);
+        Log.d("@@@", "GPU:" + isGPU + " DSP:" + isDSP);
+
+        copyToLocal("mobilenet_ssd.dlc");
+        File file = getFilesDir();
+        mModelPath = file.getAbsolutePath() + "/mobilenet_ssd.dlc";
+        mTargetRuntime = NeuralNetwork.Runtime.CPU;
 
         mDteDetectionTask = new DetectionTask(this);
     }
@@ -72,11 +110,24 @@ public class MainActivity extends AppCompatActivity {
     public boolean onCreateOptionsMenu(Menu menu) {
         MenuInflater inflater = getMenuInflater();
         inflater.inflate(R.menu.menu, menu);
+
+        final SNPE.NeuralNetworkBuilder builder = new SNPE.NeuralNetworkBuilder(
+                (Application) (getApplicationContext()));
+        for (MenuRuntimeGroup item : MenuRuntimeGroup.values()) {
+            if (builder.isRuntimeSupported(item.runtime)) {
+                menu.add(MenuRuntimeGroup.ID, item.ordinal(), 0, item.runtime.name());
+            }
+        }
         return super.onCreateOptionsMenu(menu);
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getGroupId() == MenuRuntimeGroup.ID) {
+            final MenuRuntimeGroup option = MenuRuntimeGroup.values()[item.getItemId()];
+            mTargetRuntime = option.runtime;
+            return true;
+        }
         switch (item.getItemId()) {
             case R.id.file_open:
                 startImagePicker();
@@ -120,16 +171,38 @@ public class MainActivity extends AppCompatActivity {
         return bitmap;
     }
 
+    private void copyToLocal(String fileName) {
+        Log.d("@@@", "copyToLocal() start");
+        try {
+            InputStream inputStream = getAssets().open(fileName);
+            FileOutputStream fileOutputStream = openFileOutput(fileName, MODE_PRIVATE);
+            byte[] buffer = new byte[1024];
+            int length = 0;
+            while ((length = inputStream.read(buffer)) >= 0) {
+                fileOutputStream.write(buffer, 0, length);
+            }
+            fileOutputStream.close();
+            inputStream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        Log.d("@@@", "copyToLocal() end");
+    }
+
     class DetectionTask extends AsyncTask<Bitmap, Bitmap, Bitmap> {
         private TinyYolo mTinyYolo;
+        private SnpeMobileNetSsd mSsd;
 
         DetectionTask(Context context) {
-            mTinyYolo = new TinyYolo(context);
+            //mTinyYolo = new TinyYolo(context);
+            File model = new File(mModelPath);
+            mSsd = new SnpeMobileNetSsd(getApplication(), mTargetRuntime, model);
         }
 
         @Override
         protected Bitmap doInBackground(Bitmap... bitmaps) {
-            return drawRect(mTinyYolo.detection(bitmaps[0]));
+//            return drawRect(mTinyYolo.detection(bitmaps[0]));
+            return drawRect(mSsd.detection(bitmaps[0]));
         }
 
         @Override
